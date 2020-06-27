@@ -17,14 +17,82 @@ pub const Display = struct {
 pub const Connection = struct {
     allocator: *Allocator,
     file: File,
-    setup: []u8,
+    setup_buffer: []u8,
+    setup: xcb_setup_t,
     status: Status,
+    xid: Xid,
 
+    /// Xid is used to determine the window id
+    const Xid = struct {
+        last: u32,
+        max: u32,
+        base: u32,
+        inc: u32,
+
+        fn init(connection: Connection) Xid {
+            // we could use @setRuntimeSafety(false) in this case
+            const inc: i32 = @bitCast(i32, connection.setup.resource_id_mask) &
+                -@bitCast(i32, connection.setup.resource_id_mask);
+            return Xid{
+                .last = 0,
+                .max = 0,
+                .base = connection.setup.resource_id_base,
+                .inc = @bitCast(u32, inc),
+            };
+        }
+    };
+
+    /// Status represents the state of the connection
     pub const Status = enum {
         SetupFailed = 0,
         Ok = 1,
         Authenticate = 2,
     };
+
+    /// Generates a new XID
+    fn getNewXid(self: *Connection) !u32 {
+        var ret: u32 = 0;
+        if (self.status != .Ok) {
+            return error.InvalidConnection;
+        }
+
+        var temp: u32 = undefined;
+        if (@subWithOverflow(u32, self.xid.max, self.xid.inc, &temp)) {
+            temp = 0;
+        }
+        if (self.xid.last >= temp) {
+            if (self.xid.last == 0) {
+                self.xid.max = self.setup.resource_id_mask;
+            } else {
+                const xcb_xc_misc_get_xid_range_reply_t = extern struct {
+                    response_type: u8,
+                    pad0: u8,
+                    sequence: u16,
+                    length: u32,
+                    start_id: u32,
+                    count: u32,
+                };
+                const xid_range_request = xcb_xid_range_request_t{
+                    .major_opcode = 136,
+                    .minor_opcode = 1,
+                    .length = 1,
+                };
+                var parts: [1]os.iovec_const = undefined;
+                parts[0].iov_base = @ptrCast([*]const u8, &xid_range_request);
+                parts[0].iov_len = @sizeOf(xcb_xid_range_request_t);
+
+                _ = try self.file.writev(parts[0..1]);
+                const stream = self.file.reader();
+                const reply = try stream.readStruct(xcb_xc_misc_get_xid_range_reply_t);
+                self.xid.last = reply.start_id;
+                self.xid.max = reply.start_id + (reply.count - 1) * self.xid.inc;
+            }
+        } else {
+            self.xid.last += self.xid.inc;
+        }
+        ret = self.xid.last | self.xid.base;
+        return ret;
+    }
 };
 
 pub const Auth = struct {
@@ -50,6 +118,56 @@ pub fn openDefaultDisplay(allocator: *Allocator) !Connection {
 
 pub fn getDefaultDisplayName() ?[]const u8 {
     return os.getenv("DISPLAY");
+}
+
+pub fn createWindow(connection: *Connection) !void {
+    var window: xcb_window_t = try connection.getNewXid();
+    const window_request = xcb_create_window_request_t{
+        .major_opcode = 1,
+        .depth = 0,
+        .length = @sizeOf(xcb_create_window_request_t),
+        .wid = window,
+        .parent = 489,
+        .x = 0,
+        .y = 0,
+        .width = 500,
+        .height = 500,
+        .border_width = 10,
+        .class = 0,
+        .visual = 0,
+        .value_mask = 0,
+    };
+    var parts: [1]os.iovec_const = undefined;
+    parts[0].iov_base = @ptrCast([*]const u8, &window_request);
+    parts[0].iov_len = @sizeOf(xcb_create_window_request_t);
+    _ = try connection.file.writev(parts[0..1]);
+
+    const map_request = xcb_map_window_request_t{
+        .major_opcode = 8,
+        .pad0 = 0,
+        .length = 2,
+        .window = window,
+    };
+    parts[0].iov_base = @ptrCast([*]const u8, &map_request);
+    parts[0].iov_len = @sizeOf(xcb_map_window_request_t);
+    _ = try connection.file.writev(parts[0..1]);
+
+    const stream = &connection.file.reader();
+    const CreateNotify = extern struct {
+        parent: xcb_window_t,
+        window: xcb_window_t,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        border_width: u16,
+        override_redirect: bool,
+    };
+
+    //std.debug.print("{}\n", .{stream.readByte()});
+
+    //const notify = try stream.readStruct(CreateNotify);
+    //std.debug.print("Notify: {}\n", .{notify});
 }
 
 pub const OpenDisplayError = error{
@@ -153,9 +271,11 @@ pub fn connectToDisplay(allocator: *Allocator, parsed: ParsedDisplay, optional_a
             error.BrokenPipe => return error.AuthFileUnavailable,
             error.DeviceBusy => return error.AuthFileUnavailable,
             error.PermissionDenied => return error.AuthFileUnavailable,
-            error.FileLocksNotSupported => return error.AuthFileUnavailable,
-            error.Unexpected => return error.Unexpected,
             error.ConnectionTimedOut => return error.AuthFileUnavailable,
+            error.FileLocksNotSupported => return error.AuthFileUnavailable,
+
+            error.Unexpected => return error.Unexpected,
+
             error.SystemFdQuotaExceeded => return error.SystemResources,
             error.SystemResources => return error.AuthFileUnavailable,
 
@@ -199,11 +319,16 @@ pub fn connectToFile(allocator: *Allocator, file: File, auth: ?Auth) !Connection
         .allocator = allocator,
         .file = file,
         .setup = undefined,
+        .setup_buffer = undefined,
         .status = undefined,
+        .xid = undefined,
     };
 
     try writeSetup(file, auth);
     try readSetup(allocator, &conn);
+    if (conn.status == .Ok) {
+        conn.xid = Connection.Xid.init(conn);
+    }
 
     return conn;
 }
@@ -218,10 +343,10 @@ fn readSetup(allocator: *Allocator, conn: *Connection) !void {
     };
     const header = try stream.readStruct(xcb_setup_generic_t);
 
-    conn.setup = try allocator.alloc(u8, header.length * 4);
-    errdefer allocator.free(conn.setup);
+    conn.setup_buffer = try allocator.alloc(u8, header.length * 4);
+    errdefer allocator.free(conn.setup_buffer);
 
-    try stream.readNoEof(conn.setup);
+    try stream.readNoEof(conn.setup_buffer);
 
     conn.status = switch (header.status) {
         0 => Connection.Status.SetupFailed,
@@ -229,6 +354,58 @@ fn readSetup(allocator: *Allocator, conn: *Connection) !void {
         2 => Connection.Status.Authenticate,
         else => return error.InvalidStatus,
     };
+
+    if (conn.status == .Ok) {
+        try parseSetup(conn);
+    }
+}
+
+/// Parses the setup received from the connection into
+/// seperate struct types
+fn parseSetup(conn: *Connection) !void {
+    var setup: xcb_setup_t = undefined;
+    var index: usize = parseSetupType(&setup, conn.setup_buffer[0..]);
+    conn.setup = setup;
+
+    const vendor = conn.setup_buffer[index .. index + conn.setup.vendor_len];
+    index += vendor.len;
+
+    var format_counter: usize = 0;
+    while (format_counter < conn.setup.pixmap_formats_len) : (format_counter += 1) {
+        var format: xcb_format_t = undefined;
+        index += parseSetupType(&format, conn.setup_buffer[index..]);
+    }
+
+    var screen_counter: usize = 0;
+    while (screen_counter < conn.setup.roots_len) : (screen_counter += 1) {
+        var screen: xcb_screen_t = undefined;
+        index += parseSetupType(&screen, conn.setup_buffer[index..]);
+
+        std.debug.print("Screen: {}\n", .{screen});
+
+        var depth_counter: usize = 0;
+        while (depth_counter < screen.allowed_depths_len) : (depth_counter += 1) {
+            var depth: xcb_depth_t = undefined;
+            index += parseSetupType(&depth, conn.setup_buffer[index..]);
+
+            var visual_counter: usize = 0;
+            while (visual_counter < depth.visuals_len) : (visual_counter += 1) {
+                var visual_type: cxb_visual_type_t = undefined;
+                index += parseSetupType(&visual_type, conn.setup_buffer[index..]);
+            }
+        }
+    }
+    if (index != conn.setup_buffer.len) {
+        return error.IncorrectSetup;
+    }
+}
+
+/// Retrieves the wanted type from the buffer and returns its size
+fn parseSetupType(wanted: var, buffer: []u8) usize {
+    assert(@typeInfo(@TypeOf(wanted)) == .Pointer);
+    const size = @sizeOf(@TypeOf(wanted.*));
+    wanted.* = std.mem.bytesToValue(@TypeOf(wanted.*), buffer[0..size]);
+    return size;
 }
 
 fn writeSetup(file: File, auth: ?Auth) !void {
