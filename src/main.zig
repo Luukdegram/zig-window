@@ -55,7 +55,7 @@ pub const Connection = struct {
         if (self.status != .Ok) {
             return error.InvalidConnection;
         }
-
+        std.debug.print("Range len: {}\n", .{@sizeOf(xcb_xid_range_request_t)});
         var temp: u32 = undefined;
         if (@subWithOverflow(u32, self.xid.max, self.xid.inc, &temp)) {
             temp = 0;
@@ -64,14 +64,6 @@ pub const Connection = struct {
             if (self.xid.last == 0) {
                 self.xid.max = self.setup.resource_id_mask;
             } else {
-                const xcb_xc_misc_get_xid_range_reply_t = extern struct {
-                    response_type: u8,
-                    pad0: u8,
-                    sequence: u16,
-                    length: u32,
-                    start_id: u32,
-                    count: u32,
-                };
                 const xid_range_request = xcb_xid_range_request_t{
                     .major_opcode = 136,
                     .minor_opcode = 1,
@@ -84,6 +76,9 @@ pub const Connection = struct {
                 _ = try self.file.writev(parts[0..1]);
                 const stream = self.file.reader();
                 const reply = try stream.readStruct(xcb_xc_misc_get_xid_range_reply_t);
+
+                std.debug.print("Reply: {}\n", .{reply});
+
                 self.xid.last = reply.start_id;
                 self.xid.max = reply.start_id + (reply.count - 1) * self.xid.inc;
             }
@@ -122,10 +117,11 @@ pub fn getDefaultDisplayName() ?[]const u8 {
 
 pub fn createWindow(connection: *Connection) !void {
     var window: xcb_window_t = try connection.getNewXid();
+
     const window_request = xcb_create_window_request_t{
         .major_opcode = 1,
         .depth = 0,
-        .length = @sizeOf(xcb_create_window_request_t),
+        .length = 8,
         .wid = window,
         .parent = 489,
         .x = 0,
@@ -137,10 +133,10 @@ pub fn createWindow(connection: *Connection) !void {
         .visual = 0,
         .value_mask = 0,
     };
-    var parts: [1]os.iovec_const = undefined;
+    var parts: [2]os.iovec_const = undefined;
     parts[0].iov_base = @ptrCast([*]const u8, &window_request);
     parts[0].iov_len = @sizeOf(xcb_create_window_request_t);
-    _ = try connection.file.writev(parts[0..1]);
+    //_ = try connection.file.writev(parts[0..1]);
 
     const map_request = xcb_map_window_request_t{
         .major_opcode = 8,
@@ -148,26 +144,15 @@ pub fn createWindow(connection: *Connection) !void {
         .length = 2,
         .window = window,
     };
-    parts[0].iov_base = @ptrCast([*]const u8, &map_request);
-    parts[0].iov_len = @sizeOf(xcb_map_window_request_t);
-    _ = try connection.file.writev(parts[0..1]);
+    parts[1].iov_base = @ptrCast([*]const u8, &map_request);
+    parts[1].iov_len = @sizeOf(xcb_map_window_request_t);
 
+    _ = try connection.file.writev(parts[0..2]);
+
+    var slice: [32]u8 = undefined;
     const stream = &connection.file.reader();
-    const CreateNotify = extern struct {
-        parent: xcb_window_t,
-        window: xcb_window_t,
-        x: i16,
-        y: i16,
-        width: u16,
-        height: u16,
-        border_width: u16,
-        override_redirect: bool,
-    };
-
-    //std.debug.print("{}\n", .{stream.readByte()});
-
-    //const notify = try stream.readStruct(CreateNotify);
-    //std.debug.print("Notify: {}\n", .{notify});
+    const error_value = try stream.readStruct(xcb_value_error_t);
+    std.debug.print("Slice: {}\n", .{error_value});
 }
 
 pub const OpenDisplayError = error{
@@ -235,8 +220,8 @@ pub fn open(host: []const u8, protocol: []const u8, display: u32) !File {
 
     var path_buf: [fs.MAX_PATH_BYTES]u8 = undefined;
     const socket_path = std.fmt.bufPrint(path_buf[0..], "/tmp/.X11-unix/X{}", .{display}) catch unreachable;
-
-    return net.connectUnixSocket(socket_path);
+    std.debug.print("Path: {}\n", .{socket_path});
+    return net.connectUnixSocket("/tmp/socat-listen");
 }
 
 pub fn connectToDisplay(allocator: *Allocator, parsed: ParsedDisplay, optional_auth: ?Auth) !Connection {

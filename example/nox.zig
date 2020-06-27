@@ -12,6 +12,7 @@ pub fn main() !void {
             std.process.exit(1);
         },
     }
+
     try window.createWindow(&conn);
 
     std.debug.warn("OK\n", .{});

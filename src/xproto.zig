@@ -49,6 +49,12 @@ pub const xcb_create_window_request_t = extern struct {
     visual: xcb_visualid_t,
     value_mask: u32,
 };
+pub const xcb_get_window_attributes_request_t = extern struct {
+    major_opcode: u8,
+    pad0: u8,
+    length: u16,
+    window: xcb_window_t,
+};
 pub const xcb_map_window_request_t = extern struct {
     major_opcode: u8,
     pad0: u8,
@@ -94,4 +100,22 @@ pub const cxb_visual_type_t = extern struct {
     green_mask: u32,
     blue_mask: u32,
     pad0: [4]u8,
+};
+pub const xcb_value_error_t = extern struct {
+    response_type: u8,
+    error_code: u8,
+    sequence: u16,
+    bad_value: u32,
+    minor_opcode: u16,
+    major_opcode: u8,
+    pad0: u8,
+};
+pub const xcb_xc_misc_get_xid_range_reply_t = extern struct {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    length: u32,
+    start_id: u32,
+    count: u32,
+    pad1: [16]u8,
 };
