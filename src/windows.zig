@@ -54,11 +54,12 @@ extern "user32" fn BeginPaint(hWnd: HWND, lpPaint: *PaintStruct) HDC;
 extern "user32" fn EndPaint(hWnd: HWND, lpPaint: *const PaintStruct) bool;
 extern "user32" fn EnumDisplayMonitors(hdc: ?HDC, lprcClip: ?*const Rect, lpfnEnum: MonitorEnumProc, dwData: LPARAM) bool;
 
+pub const DisplayHandle = HMONITOR;
+
 pub const Display = struct {
     handle: HMONITOR,
     area: Rect,
     work_area: Rect,
-    device_name_mem: [32]u8,
 };
 
 fn openDisplayFromHandle(handle: HMONITOR) !Display {
@@ -73,12 +74,7 @@ fn openDisplayFromHandle(handle: HMONITOR) !Display {
         .handle = handle,
         .area = monitor_info.rcMonitor,
         .work_area = monitor_info.rcWork,
-        .device_name_mem = monitor_info.szDevice,
     };
-}
-
-pub fn openDisplay(display_info: DisplayInfo) !Display {
-    return try openDisplayFromHandle(display_info.handle);
 }
 
 pub fn openDefaultDisplay(allocator: *std.mem.Allocator) !Display {
@@ -143,41 +139,30 @@ pub fn loop() bool {
     return true;
 }
 
-pub const DisplayHandle = HMONITOR;
-
-const CollectDisplaysError = error{
+const GetInfoListError = error{
     InvalidDisplayInfo,
     OutOfMemory,
 };
 
 const MonitorEnumData = struct {
-    list: std.ArrayList(DisplayInfo),
-    err: ?CollectDisplaysError,
+    list: std.ArrayList(Display),
+    err: ?GetInfoListError,
 };
 
 fn monitorEnum(handle: HMONITOR, hdc: ?HDC, rect: ?*const Rect, param: LPARAM) callconv(.Stdcall) void {
     var data = @ptrCast(*MonitorEnumData, @alignCast(@alignOf(MonitorEnumData), param.?));
-
-    var monitor_info: MonitorInfoEx = undefined;
-    monitor_info.cbSize = @sizeOf(MonitorInfoEx);
-
-    if (!GetMonitorInfoA(handle, &monitor_info)) {
-        data.err = error.InvalidDisplayInfo;
+    data.list.append(openDisplayFromHandle(handle) catch |err| {
+        data.err = err;
         return;
-    }
-
-    data.list.append(.{
-        .height = @intCast(u16, monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top),
-        .width = @intCast(u16, monitor_info.rcMonitor.right - monitor_info.rcMonitor.left),
-        .handle = handle,
     }) catch {
         data.err = error.OutOfMemory;
+        return;
     };
 }
 
-pub fn collectDisplays(allocator: *std.mem.Allocator) ![]DisplayInfo {
+pub fn getDisplayList(allocator: *std.mem.Allocator) ![]Display {
     var data = MonitorEnumData{
-        .list = std.ArrayList(DisplayInfo).init(allocator),
+        .list = std.ArrayList(Display).init(allocator),
         .err = null,
     };
     if (EnumDisplayMonitors(null, null, monitorEnum, @ptrCast(LPARAM, &data))) {

@@ -11,10 +11,3 @@ pub const CreateWindowOptions = struct {
     title: [*:0]const u8,
     title_bar: bool = true,
 };
-
-pub const DisplayInfo = struct {
-    width: u16,
-    height: u16,
-
-    handle: DisplayHandle,
-};
