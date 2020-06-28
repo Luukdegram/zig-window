@@ -1,5 +1,18 @@
 pub const X_PROTOCOL = 11;
 pub const X_PROTOCOL_REVISION = 0;
+pub const X_GC_FOREGROUND = 4;
+pub const X_GC_BACKGROUND = 8;
+pub const X_GC_GRAPHICS_EXPOSURES = 65536;
+pub const X_GX_COPY = 3;
+pub const XKeycode = u8;
+pub const XVisualId = u32;
+pub const XWindow = u32;
+pub const XGContext = u32;
+pub const XDrawable = u32;
+pub const XPixmap = u32;
+pub const XFont = u32;
+pub const XBool32 = u32;
+
 pub const XSetupRequest = extern struct {
     byte_order: u8,
     pad0: u8,
@@ -31,9 +44,6 @@ pub const XIdRangeRequest = extern struct {
     minor_opcode: u8,
     length: u16,
 };
-pub const XKeycode = u8;
-pub const XVisualId = u32;
-pub const XWindow = u32;
 pub const XCreateWindowRequest = extern struct {
     major_opcode: u8,
     depth: u8,
@@ -108,7 +118,7 @@ pub const XValueError = extern struct {
     bad_value: u32,
     minor_opcode: u16,
     major_opcode: u8,
-    pad0: u8,
+    pad0: [21]u8,
 };
 pub const XIdRangeReply = extern struct {
     response_type: u8,
@@ -118,4 +128,37 @@ pub const XIdRangeReply = extern struct {
     start_id: u32,
     count: u32,
     pad1: [16]u8,
+};
+pub const XCreateGCRequest = extern struct {
+    major_opcode: u8,
+    pad0: u8,
+    length: u16,
+    cid: XGContext,
+    drawable: XDrawable,
+    mask: u32,
+};
+pub const XCreateGCValueList = extern struct {
+    function: u32 = X_GX_COPY,
+    plane_mask: u32 = 0,
+    foreground: u32 = 0,
+    background: u32 = 1,
+    line_width: u32 = 0,
+    line_style: u32 = 0,
+    cap_style: u32 = 1,
+    join_style: u32 = 0,
+    fill_style: u32 = 0,
+    fill_rule: u32 = 0,
+    tile: XPixmap = 0,
+    stipple: XPixmap = 0,
+    tile_stipple_x_origin: u32 = 0,
+    tile_stipple_y_origin: u32 = 0,
+    font: XFont = 0,
+    subwindow_mode: u32 = 0,
+    graphics_exposures: XBool32 = 1,
+    clip_x_origin: u32 = 0,
+    clip_y_origin: u32 = 0,
+    clip_mask: XPixmap = 0,
+    dash_offset: u32 = 0,
+    dashes: u32 = 0,
+    arc_mode: u32 = 1,
 };

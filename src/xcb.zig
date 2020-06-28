@@ -129,21 +129,67 @@ pub fn getDefaultDisplayName() ?[]const u8 {
     return os.getenv("DISPLAY");
 }
 
-pub fn createWindow(connection: *Connection, width: u16, height: u16) !void {
-    var window: XWindow = try connection.getNewXid();
-    const screen:Screen = connection.screens[0];
+pub const Window = struct {
+    handle: u32,
+    connection: *Connection,
+    screen: Screen,
+};
+
+/// Creates a new context and returns its id
+fn createContext(connection: *Connection, mask: u32, values: []u32) !u32 {
+    const xid = try connection.getNewXid();
+    const screen: Screen = connection.screens[0];
+
+    const request = XCreateGCRequest{
+        .major_opcode = 55,
+        .pad0 = 0,
+        .length = @sizeOf(XCreateGCRequest) / 4 + 2,
+        .cid = xid,
+        .drawable = screen.root,
+        .mask = mask,
+    };
+    var context_value_list = XCreateGCValueList{};
+    context_value_list.background = screen.black_pixel;
+
+    var parts = std.ArrayList(os.iovec_const).init(connection.allocator);
+    errdefer parts.deinit();
+
+    try parts.append(.{
+        .iov_base = @ptrCast([*]const u8, &request),
+        .iov_len = @sizeOf(XCreateGCRequest),
+    });
+
+    for (values) |val| {
+        try parts.append(.{
+            .iov_base = @ptrCast([*]const u8, &val),
+            .iov_len = 4,
+        });
+    }
+
+    try connection.file.writevAll(parts.toOwnedSlice());
+
+    return xid;
+}
+
+pub fn createWindow(connection: *Connection, width: u16, height: u16) !Window {
+    const screen: Screen = connection.screens[0];
+    const mask = X_GC_FOREGROUND | X_GC_GRAPHICS_EXPOSURES;
+    const values: []u32 = &[_]u32{ screen.black_pixel, 0 };
+
+    const foreground = try createContext(connection, mask, values);
+    const xid = try connection.getNewXid();
 
     const window_request = XCreateWindowRequest{
         .major_opcode = 1,
         .depth = 0,
         .length = @sizeOf(XCreateWindowRequest) / 4,
-        .wid = window,
+        .wid = xid,
         .parent = screen.root,
         .x = 0,
         .y = 0,
         .width = width,
         .height = height,
-        .border_width = 10,
+        .border_width = 0,
         .class = 0,
         .visual = 0,
         .value_mask = 0,
@@ -156,12 +202,18 @@ pub fn createWindow(connection: *Connection, width: u16, height: u16) !void {
         .major_opcode = 8,
         .pad0 = 0,
         .length = @sizeOf(XMapWindowRequest) / 4,
-        .window = window,
+        .window = xid,
     };
     parts[1].iov_base = @ptrCast([*]const u8, &map_request);
     parts[1].iov_len = @sizeOf(XMapWindowRequest);
 
-    _ = try connection.file.writev(parts[0..2]);
+    try connection.file.writevAll(parts[0..2]);
+
+    return Window{
+        .handle = xid,
+        .screen = screen,
+        .connection = connection,
+    };
 }
 
 pub const OpenDisplayError = error{
@@ -225,6 +277,12 @@ pub fn parseDisplay(name: []const u8) !ParsedDisplay {
 pub fn open(host: []const u8, protocol: []const u8, display: u32) !File {
     if (protocol.len != 0 and !mem.eql(u8, protocol, "unix")) {
         return error.UnsupportedProtocol;
+    }
+
+    if (host.len != 0) {
+        const port: u16 = 6000 + @intCast(u16, display);
+        const address = try std.net.Address.parseIp(host, port);
+        return std.net.tcpConnectToAddress(address);
     }
 
     var path_buf: [fs.MAX_PATH_BYTES]u8 = undefined;
@@ -400,7 +458,7 @@ pub const Screen = struct {
     backing_store: u8,
     save_unders: u8,
     root_depth: u8,
-    depths: []Depth
+    depths: []Depth,
 };
 
 /// Parses the setup received from the connection into
@@ -410,7 +468,7 @@ fn parseSetup(conn: *Connection) !void {
 
     var setup: XSetup = undefined;
     var index: usize = parseSetupType(&setup, conn.setup_buffer[0..]);
-    
+
     conn.setup = Connection.Setup{
         .base = setup.resource_id_base,
         .mask = setup.resource_id_mask,
@@ -429,7 +487,7 @@ fn parseSetup(conn: *Connection) !void {
         try formats.append(.{
             .depth = format.depth,
             .bits_per_pixel = format.bits_per_pixel,
-            .scanline_pad = format.scanline_pad
+            .scanline_pad = format.scanline_pad,
         });
     }
 
@@ -465,7 +523,7 @@ fn parseSetup(conn: *Connection) !void {
 
             try depths.append(.{
                 .depth = depth.depth,
-                .visual_types = visual_types.toOwnedSlice()
+                .visual_types = visual_types.toOwnedSlice(),
             });
         }
         try screens.append(.{
@@ -484,14 +542,14 @@ fn parseSetup(conn: *Connection) !void {
             .backing_store = screen.backing_store,
             .save_unders = screen.save_unders,
             .root_depth = screen.root_depth,
-            .depths = depths.toOwnedSlice()
+            .depths = depths.toOwnedSlice(),
         });
     }
-    
+
     if (index != conn.setup_buffer.len) {
         return error.IncorrectSetup;
     }
-    
+
     conn.formats = formats.toOwnedSlice();
     conn.screens = screens.toOwnedSlice();
 }
