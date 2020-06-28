@@ -13,7 +13,7 @@ pub fn main() !void {
         },
     }
 
-    try window.createWindow(&conn);
+    try window.createWindow(&conn, 0, 0, 500, 500);
 
     std.debug.warn("OK\n", .{});
 
