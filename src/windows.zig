@@ -62,7 +62,7 @@ pub const Display = struct {
     work_area: Rect,
 };
 
-fn openDisplayFromHandle(handle: HMONITOR) !Display {
+fn getDisplayFromHandle(handle: HMONITOR) !Display {
     var monitor_info: MonitorInfoEx = undefined;
     monitor_info.cbSize = @sizeOf(MonitorInfoEx);
 
@@ -77,9 +77,9 @@ fn openDisplayFromHandle(handle: HMONITOR) !Display {
     };
 }
 
-pub fn openDefaultDisplay(allocator: *std.mem.Allocator) !Display {
+pub fn getDefaultDisplay(allocator: *std.mem.Allocator) !Display {
     const monitor_handle = MonitorFromPoint(.{ .x = 0, .y = 0 }, MONITOR_DEFAULTTOPRIMARY).?;
-    return try openDisplayFromHandle(monitor_handle);
+    return try getDisplayFromHandle(monitor_handle);
 }
 
 pub const Window = struct {
@@ -151,7 +151,7 @@ const MonitorEnumData = struct {
 
 fn monitorEnum(handle: HMONITOR, hdc: ?HDC, rect: ?*const Rect, param: LPARAM) callconv(.Stdcall) void {
     var data = @ptrCast(*MonitorEnumData, @alignCast(@alignOf(MonitorEnumData), param.?));
-    data.list.append(openDisplayFromHandle(handle) catch |err| {
+    data.list.append(getDisplayFromHandle(handle) catch |err| {
         data.err = err;
         return;
     }) catch {

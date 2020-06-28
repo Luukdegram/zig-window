@@ -121,7 +121,7 @@ pub const Auth = struct {
     }
 };
 
-pub fn openDefaultDisplay(allocator: *Allocator) !Connection {
+pub fn getDefaultDisplay(allocator: *Allocator) !Connection {
     const default_name = getDefaultDisplayName() orelse return error.UnknownDefaultDisplay;
     return openDisplay(allocator, default_name);
 }
