@@ -4,3 +4,4 @@ pub usingnamespace switch (std.builtin.os.tag) {
     .linux => @import("xcb.zig"),
     else => @compileError("Unsupported OS"),
 };
+

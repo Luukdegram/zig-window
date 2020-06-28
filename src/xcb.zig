@@ -18,9 +18,17 @@ pub const Connection = struct {
     allocator: *Allocator,
     file: File,
     setup_buffer: []u8,
-    setup: xcb_setup_t,
+    setup: Setup,
     status: Status,
     xid: Xid,
+    formats: []Format,
+    screens: []Screen,
+
+    /// Setup contains the base and mask retrieved from XSetup
+    pub const Setup = struct {
+        base: u32,
+        mask: u32,
+    };
 
     /// Xid is used to determine the window id
     const Xid = struct {
@@ -31,12 +39,12 @@ pub const Connection = struct {
 
         fn init(connection: Connection) Xid {
             // we could use @setRuntimeSafety(false) in this case
-            const inc: i32 = @bitCast(i32, connection.setup.resource_id_mask) &
-                -@bitCast(i32, connection.setup.resource_id_mask);
+            const inc: i32 = @bitCast(i32, connection.setup.mask) &
+                -@bitCast(i32, connection.setup.mask);
             return Xid{
                 .last = 0,
                 .max = 0,
-                .base = connection.setup.resource_id_base,
+                .base = connection.setup.base,
                 .inc = @bitCast(u32, inc),
             };
         }
@@ -55,29 +63,26 @@ pub const Connection = struct {
         if (self.status != .Ok) {
             return error.InvalidConnection;
         }
-        std.debug.print("Range len: {}\n", .{@sizeOf(xcb_xid_range_request_t)});
         var temp: u32 = undefined;
         if (@subWithOverflow(u32, self.xid.max, self.xid.inc, &temp)) {
             temp = 0;
         }
         if (self.xid.last >= temp) {
             if (self.xid.last == 0) {
-                self.xid.max = self.setup.resource_id_mask;
+                self.xid.max = self.setup.mask;
             } else {
-                const xid_range_request = xcb_xid_range_request_t{
+                const xid_range_request = XIdRangeRequest{
                     .major_opcode = 136,
                     .minor_opcode = 1,
                     .length = 1,
                 };
                 var parts: [1]os.iovec_const = undefined;
                 parts[0].iov_base = @ptrCast([*]const u8, &xid_range_request);
-                parts[0].iov_len = @sizeOf(xcb_xid_range_request_t);
+                parts[0].iov_len = @sizeOf(XIdRangeRequest);
 
                 _ = try self.file.writev(parts[0..1]);
                 const stream = self.file.reader();
-                const reply = try stream.readStruct(xcb_xc_misc_get_xid_range_reply_t);
-
-                std.debug.print("Reply: {}\n", .{reply});
+                const reply = try stream.readStruct(XIdRangeReply);
 
                 self.xid.last = reply.start_id;
                 self.xid.max = reply.start_id + (reply.count - 1) * self.xid.inc;
@@ -87,6 +92,15 @@ pub const Connection = struct {
         }
         ret = self.xid.last | self.xid.base;
         return ret;
+    }
+
+    /// Disconnects from X and frees all memory
+    pub fn disconnect(self: *Connection) void {
+        self.allocator.free(self.setup_buffer);
+        self.allocator.free(self.formats);
+        self.allocator.free(self.screens);
+        self.file.close();
+        self.* = undefined;
     }
 };
 
@@ -115,15 +129,16 @@ pub fn getDefaultDisplayName() ?[]const u8 {
     return os.getenv("DISPLAY");
 }
 
-pub fn createWindow(connection: *Connection, width: u16, height: u16) !xcb_window_t {
-    var window: xcb_window_t = try connection.getNewXid();
+pub fn createWindow(connection: *Connection, width: u16, height: u16) !void {
+    var window: XWindow = try connection.getNewXid();
+    const screen:Screen = connection.screens[0];
 
-    const window_request = xcb_create_window_request_t{
+    const window_request = XCreateWindowRequest{
         .major_opcode = 1,
         .depth = 0,
-        .length = 8,
+        .length = @sizeOf(XCreateWindowRequest) / 4,
         .wid = window,
-        .parent = 489,
+        .parent = screen.root,
         .x = 0,
         .y = 0,
         .width = width,
@@ -135,26 +150,18 @@ pub fn createWindow(connection: *Connection, width: u16, height: u16) !xcb_windo
     };
     var parts: [2]os.iovec_const = undefined;
     parts[0].iov_base = @ptrCast([*]const u8, &window_request);
-    parts[0].iov_len = @sizeOf(xcb_create_window_request_t);
-    //_ = try connection.file.writev(parts[0..1]);
+    parts[0].iov_len = @sizeOf(XCreateWindowRequest);
 
-    const map_request = xcb_map_window_request_t{
+    const map_request = XMapWindowRequest{
         .major_opcode = 8,
         .pad0 = 0,
-        .length = 2,
+        .length = @sizeOf(XMapWindowRequest) / 4,
         .window = window,
     };
     parts[1].iov_base = @ptrCast([*]const u8, &map_request);
-    parts[1].iov_len = @sizeOf(xcb_map_window_request_t);
+    parts[1].iov_len = @sizeOf(XMapWindowRequest);
 
     _ = try connection.file.writev(parts[0..2]);
-
-    var slice: [32]u8 = undefined;
-    const stream = &connection.file.reader();
-    const error_value = try stream.readStruct(xcb_value_error_t);
-    std.debug.print("Slice: {}\n", .{error_value});
-
-    return window;
 }
 
 pub const OpenDisplayError = error{
@@ -185,12 +192,7 @@ pub fn openDisplay(allocator: *Allocator, name: []const u8) !Connection {
         error.MissingDisplayIndex => return error.InvalidDisplayFormat,
         error.InvalidCharacter => return error.InvalidDisplayFormat,
     };
-    const connection = try connectToDisplay(allocator, parsed, null);
-    switch (connection.status) {
-        .Ok => {},
-        else => return error.UnableToOpenDisplay,
-    }
-    return connection;
+    return try connectToDisplay(allocator, parsed, null);
 }
 
 pub const ParsedDisplay = struct {
@@ -227,8 +229,7 @@ pub fn open(host: []const u8, protocol: []const u8, display: u32) !File {
 
     var path_buf: [fs.MAX_PATH_BYTES]u8 = undefined;
     const socket_path = std.fmt.bufPrint(path_buf[0..], "/tmp/.X11-unix/X{}", .{display}) catch unreachable;
-    std.debug.print("Path: {}\n", .{socket_path});
-    return net.connectUnixSocket("/tmp/socat-listen");
+    return net.connectUnixSocket(socket_path);
 }
 
 pub fn connectToDisplay(allocator: *Allocator, parsed: ParsedDisplay, optional_auth: ?Auth) !Connection {
@@ -318,6 +319,8 @@ pub fn connectToFile(allocator: *Allocator, file: File, auth: ?Auth) !Connection
         .setup_buffer = undefined,
         .status = undefined,
         .xid = undefined,
+        .formats = undefined,
+        .screens = undefined,
     };
 
     try writeSetup(file, auth);
@@ -332,12 +335,12 @@ pub fn connectToFile(allocator: *Allocator, file: File, auth: ?Auth) !Connection
 fn readSetup(allocator: *Allocator, conn: *Connection) !void {
     const stream = &conn.file.reader();
 
-    const xcb_setup_generic_t = extern struct {
+    const XSetupGeneric = extern struct {
         status: u8,
         pad0: [5]u8,
         length: u16,
     };
-    const header = try stream.readStruct(xcb_setup_generic_t);
+    const header = try stream.readStruct(XSetupGeneric);
 
     conn.setup_buffer = try allocator.alloc(u8, header.length * 4);
     errdefer allocator.free(conn.setup_buffer);
@@ -352,48 +355,145 @@ fn readSetup(allocator: *Allocator, conn: *Connection) !void {
     };
 
     if (conn.status == .Ok) {
-        try parseSetup(conn);
+        _ = try parseSetup(conn);
     }
 }
+
+/// Format represents support pixel formats
+pub const Format = struct {
+    depth: u32,
+    bits_per_pixel: u8,
+    scanline_pad: u8,
+};
+
+/// Depth of screen buffer
+pub const Depth = struct {
+    depth: u8,
+    visual_types: []VisualType,
+};
+
+/// Represents the type of the visuals on the screen
+pub const VisualType = struct {
+    id: u32,
+    bits_per_rgb_value: u8,
+    colormap_entries: u16,
+    red_mask: u32,
+    green_mask: u32,
+    blue_mask: u32,
+};
+
+/// Screen with its values, each screen has a root id
+/// which is unique and is used to create windows on the screen
+pub const Screen = struct {
+    root: u32,
+    default_colormap: u32,
+    white_pixel: u32,
+    black_pixel: u32,
+    current_input_mask: u32,
+    width_pixel: u16,
+    height_pixel: u16,
+    width_milimeter: u16,
+    height_milimeter: u16,
+    min_installed_maps: u16,
+    max_installed_maps: u16,
+    root_visual: u32,
+    backing_store: u8,
+    save_unders: u8,
+    root_depth: u8,
+    depths: []Depth
+};
 
 /// Parses the setup received from the connection into
 /// seperate struct types
 fn parseSetup(conn: *Connection) !void {
-    var setup: xcb_setup_t = undefined;
-    var index: usize = parseSetupType(&setup, conn.setup_buffer[0..]);
-    conn.setup = setup;
+    var allocator = conn.allocator;
 
-    const vendor = conn.setup_buffer[index .. index + conn.setup.vendor_len];
+    var setup: XSetup = undefined;
+    var index: usize = parseSetupType(&setup, conn.setup_buffer[0..]);
+    
+    conn.setup = Connection.Setup{
+        .base = setup.resource_id_base,
+        .mask = setup.resource_id_mask,
+    };
+
+    // ignore the vendor for now
+    const vendor = conn.setup_buffer[index .. index + setup.vendor_len];
     index += vendor.len;
 
+    var formats = std.ArrayList(Format).init(allocator);
+    errdefer formats.deinit();
     var format_counter: usize = 0;
-    while (format_counter < conn.setup.pixmap_formats_len) : (format_counter += 1) {
-        var format: xcb_format_t = undefined;
+    while (format_counter < setup.pixmap_formats_len) : (format_counter += 1) {
+        var format: XFormat = undefined;
         index += parseSetupType(&format, conn.setup_buffer[index..]);
+        try formats.append(.{
+            .depth = format.depth,
+            .bits_per_pixel = format.bits_per_pixel,
+            .scanline_pad = format.scanline_pad
+        });
     }
 
+    var screens = std.ArrayList(Screen).init(allocator);
+    errdefer screens.deinit();
     var screen_counter: usize = 0;
-    while (screen_counter < conn.setup.roots_len) : (screen_counter += 1) {
-        var screen: xcb_screen_t = undefined;
+    while (screen_counter < setup.roots_len) : (screen_counter += 1) {
+        var screen: XScreen = undefined;
         index += parseSetupType(&screen, conn.setup_buffer[index..]);
 
-        std.debug.print("Screen: {}\n", .{screen});
-
+        var depths = std.ArrayList(Depth).init(allocator);
+        errdefer depths.deinit();
         var depth_counter: usize = 0;
         while (depth_counter < screen.allowed_depths_len) : (depth_counter += 1) {
-            var depth: xcb_depth_t = undefined;
+            var depth: XDepth = undefined;
             index += parseSetupType(&depth, conn.setup_buffer[index..]);
 
+            var visual_types = std.ArrayList(VisualType).init(allocator);
+            errdefer visual_types.deinit();
             var visual_counter: usize = 0;
             while (visual_counter < depth.visuals_len) : (visual_counter += 1) {
-                var visual_type: cxb_visual_type_t = undefined;
+                var visual_type: XVisualType = undefined;
                 index += parseSetupType(&visual_type, conn.setup_buffer[index..]);
+                try visual_types.append(.{
+                    .id = visual_type.visual_id,
+                    .bits_per_rgb_value = visual_type.bits_per_rgb_value,
+                    .colormap_entries = visual_type.colormap_entries,
+                    .red_mask = visual_type.red_mask,
+                    .green_mask = visual_type.green_mask,
+                    .blue_mask = visual_type.blue_mask,
+                });
             }
+
+            try depths.append(.{
+                .depth = depth.depth,
+                .visual_types = visual_types.toOwnedSlice()
+            });
         }
+        try screens.append(.{
+            .root = screen.root,
+            .default_colormap = screen.default_colormap,
+            .white_pixel = screen.white_pixel,
+            .black_pixel = screen.black_pixel,
+            .current_input_mask = screen.current_input_mask,
+            .width_pixel = screen.width_pixel,
+            .height_pixel = screen.height_pixel,
+            .width_milimeter = screen.width_milimeter,
+            .height_milimeter = screen.height_milimeter,
+            .min_installed_maps = screen.min_installed_maps,
+            .max_installed_maps = screen.max_installed_maps,
+            .root_visual = screen.root_visual,
+            .backing_store = screen.backing_store,
+            .save_unders = screen.save_unders,
+            .root_depth = screen.root_depth,
+            .depths = depths.toOwnedSlice()
+        });
     }
+    
     if (index != conn.setup_buffer.len) {
         return error.IncorrectSetup;
     }
+    
+    conn.formats = formats.toOwnedSlice();
+    conn.screens = screens.toOwnedSlice();
 }
 
 /// Retrieves the wanted type from the buffer and returns its size
@@ -408,7 +508,7 @@ fn writeSetup(file: File, auth: ?Auth) !void {
     const pad = [3]u8{ 0, 0, 0 };
     var parts: [6]os.iovec_const = undefined;
     var parts_index: usize = 0;
-    var setup_req = xcb_setup_request_t{
+    var setup_req = XSetupRequest{
         .byte_order = if (builtin.endian == builtin.Endian.Big) 0x42 else 0x6c,
         .pad0 = 0,
         .protocol_major_version = X_PROTOCOL,
@@ -417,10 +517,10 @@ fn writeSetup(file: File, auth: ?Auth) !void {
         .authorization_protocol_data_len = 0,
         .pad1 = [2]u8{ 0, 0 },
     };
-    parts[parts_index].iov_len = @sizeOf(xcb_setup_request_t);
+    parts[parts_index].iov_len = @sizeOf(XSetupRequest);
     parts[parts_index].iov_base = @ptrCast([*]const u8, &setup_req);
     parts_index += 1;
-    comptime assert(xpad(@sizeOf(xcb_setup_request_t)) == 0);
+    comptime assert(xpad(@sizeOf(XSetupRequest)) == 0);
 
     if (auth) |a| {
         setup_req.authorization_protocol_name_len = @intCast(u16, a.name.len);
