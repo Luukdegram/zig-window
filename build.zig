@@ -2,11 +2,18 @@ const Builder = @import("std").build.Builder;
 
 pub fn build(b: *Builder) void {
     const mode = b.standardReleaseOptions();
+    const target = b.standardTargetOptions(.{});
 
     const nox_exe = b.addExecutable("nox", "example/nox.zig");
     nox_exe.addPackagePath("window", "src/main.zig");
     nox_exe.setBuildMode(mode);
     nox_exe.install();
+
+    if (target.os_tag) |tag| {
+        if (tag == .windows)
+            nox_exe.subsystem = .Windows;
+    }
+
     const run_nox_cmd = nox_exe.run();
     const run_nox_step = b.step("example-nox", "Run the example app that doesn't link X11 C library");
     run_nox_step.dependOn(&run_nox_cmd.step);
