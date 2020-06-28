@@ -108,7 +108,6 @@ fn wndProc(handle: HWND, msg: c_uint, wParam: usize, lParam: LPARAM) callconv(.S
 
 var class_id: ?LPCSTR = null;
 
-// pub fn createWindow(connection: *Connection) !xcb_window_t {
 pub fn createWindow(display: *Display, options: CreateWindowOptions) !Window {
     const hInstance = @ptrCast(HINSTANCE, GetModuleHandleA(null).?);
 
