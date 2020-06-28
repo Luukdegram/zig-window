@@ -12,7 +12,53 @@ usingnamespace @import("xproto.zig");
 usingnamespace @import("main.zig");
 
 pub const Display = struct {
-    name: []u8,
+    connection: Connection,
+    handle: Screen,
+
+    /// Creates a new window on this display
+    pub fn createWindow(self: *Display, options: CreateWindowOptions) !Window {
+        var connection = &self.connection;
+        const screen: Screen = self.handle;
+        const mask = X_GC_FOREGROUND | X_GC_GRAPHICS_EXPOSURES;
+        const values: []u32 = &[_]u32{ screen.black_pixel, 0 };
+
+        const foreground = try createContext(connection, screen.root, mask, values);
+        const xid = try connection.getNewXid();
+
+        const window_request = XCreateWindowRequest{
+            .major_opcode = 1,
+            .depth = 0,
+            .length = @sizeOf(XCreateWindowRequest) / 4,
+            .wid = xid,
+            .parent = screen.root,
+            .x = 0,
+            .y = 0,
+            .width = options.width,
+            .height = options.height,
+            .border_width = 0,
+            .class = 0,
+            .visual = 0,
+            .value_mask = 0,
+        };
+        var parts: [2]os.iovec_const = undefined;
+        parts[0].iov_base = @ptrCast([*]const u8, &window_request);
+        parts[0].iov_len = @sizeOf(XCreateWindowRequest);
+
+        const map_request = XMapWindowRequest{
+            .major_opcode = 8,
+            .pad0 = 0,
+            .length = @sizeOf(XMapWindowRequest) / 4,
+            .window = xid,
+        };
+        parts[1].iov_base = @ptrCast([*]const u8, &map_request);
+        parts[1].iov_len = @sizeOf(XMapWindowRequest);
+
+        try connection.file.writevAll(parts[0..2]);
+
+        return Window{
+            .handle = xid,
+        };
+    }
 };
 
 pub const Connection = struct {
@@ -121,6 +167,23 @@ pub const Auth = struct {
     }
 };
 
+/// Makes a connection with the X11 server and returns a list
+/// of displays.
+pub fn getDisplayList(allocator: *Allocator) ![]Display {
+    var connection = try getDefaultDisplay(allocator);
+
+    var display_list = std.ArrayList(Display).init(allocator);
+    errdefer display_list.deinit();
+
+    for (connection.screens) |screen| {
+        try display_list.append(.{
+            .connection = connection,
+            .handle = screen,
+        });
+    }
+    return display_list.toOwnedSlice();
+}
+
 pub fn getDefaultDisplay(allocator: *Allocator) !Connection {
     const default_name = getDefaultDisplayName() orelse return error.UnknownDefaultDisplay;
     return openDisplay(allocator, default_name);
@@ -132,25 +195,20 @@ pub fn getDefaultDisplayName() ?[]const u8 {
 
 pub const Window = struct {
     handle: u32,
-    connection: *Connection,
-    screen: Screen,
 };
 
 /// Creates a new context and returns its id
-fn createContext(connection: *Connection, mask: u32, values: []u32) !u32 {
+fn createContext(connection: *Connection, root: u32, mask: u32, values: []u32) !u32 {
     const xid = try connection.getNewXid();
-    const screen: Screen = connection.screens[0];
 
     const request = XCreateGCRequest{
         .major_opcode = 55,
         .pad0 = 0,
-        .length = @sizeOf(XCreateGCRequest) / 4 + 2,
+        .length = @sizeOf(XCreateGCRequest) / 4 + @intCast(u16, values.len),
         .cid = xid,
-        .drawable = screen.root,
+        .drawable = root,
         .mask = mask,
     };
-    var context_value_list = XCreateGCValueList{};
-    context_value_list.background = screen.black_pixel;
 
     var parts = std.ArrayList(os.iovec_const).init(connection.allocator);
     errdefer parts.deinit();
@@ -170,51 +228,6 @@ fn createContext(connection: *Connection, mask: u32, values: []u32) !u32 {
     try connection.file.writevAll(parts.toOwnedSlice());
 
     return xid;
-}
-
-pub fn createWindow(connection: *Connection, options: CreateWindowOptions) !Window {
-    const screen: Screen = connection.screens[0];
-    const mask = X_GC_FOREGROUND | X_GC_GRAPHICS_EXPOSURES;
-    const values: []u32 = &[_]u32{ screen.black_pixel, 0 };
-
-    const foreground = try createContext(connection, mask, values);
-    const xid = try connection.getNewXid();
-
-    const window_request = XCreateWindowRequest{
-        .major_opcode = 1,
-        .depth = 0,
-        .length = @sizeOf(XCreateWindowRequest) / 4,
-        .wid = xid,
-        .parent = screen.root,
-        .x = 0,
-        .y = 0,
-        .width = options.width,
-        .height = options.height,
-        .border_width = 0,
-        .class = 0,
-        .visual = 0,
-        .value_mask = 0,
-    };
-    var parts: [2]os.iovec_const = undefined;
-    parts[0].iov_base = @ptrCast([*]const u8, &window_request);
-    parts[0].iov_len = @sizeOf(XCreateWindowRequest);
-
-    const map_request = XMapWindowRequest{
-        .major_opcode = 8,
-        .pad0 = 0,
-        .length = @sizeOf(XMapWindowRequest) / 4,
-        .window = xid,
-    };
-    parts[1].iov_base = @ptrCast([*]const u8, &map_request);
-    parts[1].iov_len = @sizeOf(XMapWindowRequest);
-
-    try connection.file.writevAll(parts[0..2]);
-
-    return Window{
-        .handle = xid,
-        .screen = screen,
-        .connection = connection,
-    };
 }
 
 pub const OpenDisplayError = error{
@@ -601,7 +614,7 @@ fn writeSetup(file: File, auth: ?Auth) !void {
 
     assert(parts_index <= parts.len);
 
-    _ = try file.writev(parts[0..parts_index]);
+    return file.writevAll(parts[0..parts_index]);
 }
 
 pub fn getAuth(allocator: *Allocator, sock: File, display: u32) !Auth {
