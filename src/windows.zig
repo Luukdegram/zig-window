@@ -56,31 +56,7 @@ extern "user32" fn EnumDisplayMonitors(hdc: ?HDC, lprcClip: ?*const Rect, lpfnEn
 
 pub const DisplayHandle = HMONITOR;
 
-pub const Display = struct {
-    handle: HMONITOR,
-    area: Rect,
-    work_area: Rect,
-};
-
-fn getDisplayFromHandle(handle: HMONITOR) !Display {
-    var monitor_info: MonitorInfoEx = undefined;
-    monitor_info.cbSize = @sizeOf(MonitorInfoEx);
-
-    if (!GetMonitorInfoA(handle, &monitor_info)) {
-        return error.InvalidDisplayInfo;
-    }
-
-    return Display{
-        .handle = handle,
-        .area = monitor_info.rcMonitor,
-        .work_area = monitor_info.rcWork,
-    };
-}
-
-pub fn getDefaultDisplay(allocator: *std.mem.Allocator) !Display {
-    const monitor_handle = MonitorFromPoint(.{ .x = 0, .y = 0 }, MONITOR_DEFAULTTOPRIMARY).?;
-    return try getDisplayFromHandle(monitor_handle);
-}
+var class_id: ?LPCSTR = null;
 
 pub const Window = struct {
     handle: HWND,
@@ -102,32 +78,64 @@ fn wndProc(handle: HWND, msg: c_uint, wParam: usize, lParam: LPARAM) callconv(.S
     }
 }
 
-var class_id: ?LPCSTR = null;
+pub const Display = struct {
+    handle: HMONITOR,
+    area: Rect,
+    work_area: Rect,
 
-pub fn createWindow(display: *Display, options: CreateWindowOptions) !Window {
-    const hInstance = @ptrCast(HINSTANCE, GetModuleHandleA(null).?);
-
-    if (class_id == null) {
-        // zeroInit with the values we need doesnt work for some reason.
-        var wnd_class = std.mem.zeroes(WNDCLASSEXA);
-        wnd_class.cbSize = @sizeOf(WNDCLASSEXA);
-        wnd_class.lpfnWndProc = wndProc;
-        wnd_class.hInstance = hInstance;
-        wnd_class.lpszClassName = "zig-window";
-
-        const class_atom = RegisterClassExA(&wnd_class);
-        class_id = @intToPtr(LPCSTR, @as(usize, class_atom));
+    pub fn width(self: Display) u16 {
+        return @intCast(u16, self.area.right - self.area.left);
     }
 
-    const x = @divTrunc(display.work_area.right + display.work_area.left, 2) - @intCast(i32, options.width / 2);
-    const y = @divTrunc(display.work_area.bottom + display.work_area.top, 2) - @intCast(i32, options.height / 2);
-    const style: u32 = if (options.title_bar) WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX else WS_POPUP | WS_BORDER;
-    if (CreateWindowExA(0, class_id.?, options.title, style, x, y, options.width, options.height, null, null, hInstance, null)) |handle| {
-        _ = ShowWindow(handle, SW_SHOW);
-        return Window{ .handle = handle };
-    } else {
-        return error.CreateWindowFailed;
+    pub fn height(self: Display) u16 {
+        return @intCast(u16, self.area.bottom - self.area.top);
     }
+
+    pub fn createWindow(self: Display, options: CreateWindowOptions) !Window {
+        const hInstance = @ptrCast(HINSTANCE, GetModuleHandleA(null).?);
+
+        if (class_id == null) {
+            // zeroInit with the values we need doesnt work for some reason.
+            var wnd_class = std.mem.zeroes(WNDCLASSEXA);
+            wnd_class.cbSize = @sizeOf(WNDCLASSEXA);
+            wnd_class.lpfnWndProc = wndProc;
+            wnd_class.hInstance = hInstance;
+            wnd_class.lpszClassName = "zig-window";
+
+            const class_atom = RegisterClassExA(&wnd_class);
+            class_id = @intToPtr(LPCSTR, @as(usize, class_atom));
+        }
+
+        const x = @divTrunc(self.work_area.right + self.work_area.left, 2) - @intCast(i32, options.width / 2);
+        const y = @divTrunc(self.work_area.bottom + self.work_area.top, 2) - @intCast(i32, options.height / 2);
+        const style: u32 = if (options.title_bar) WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX else WS_POPUP | WS_BORDER;
+        if (CreateWindowExA(0, class_id.?, options.title, style, x, y, options.width, options.height, null, null, hInstance, null)) |handle| {
+            _ = ShowWindow(handle, SW_SHOW);
+            return Window{ .handle = handle };
+        } else {
+            return error.CreateWindowFailed;
+        }
+    }
+};
+
+fn getDisplayFromHandle(handle: HMONITOR) !Display {
+    var monitor_info: MonitorInfoEx = undefined;
+    monitor_info.cbSize = @sizeOf(MonitorInfoEx);
+
+    if (!GetMonitorInfoA(handle, &monitor_info)) {
+        return error.InvalidDisplayInfo;
+    }
+
+    return Display{
+        .handle = handle,
+        .area = monitor_info.rcMonitor,
+        .work_area = monitor_info.rcWork,
+    };
+}
+
+pub fn getDefaultDisplay(allocator: *std.mem.Allocator) !Display {
+    const monitor_handle = MonitorFromPoint(.{ .x = 0, .y = 0 }, MONITOR_DEFAULTTOPRIMARY).?;
+    return try getDisplayFromHandle(monitor_handle);
 }
 
 pub fn loop() bool {
