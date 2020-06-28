@@ -1,7 +1,12 @@
 const std = @import("std");
 
+usingnamespace @import("main.zig");
+
 usingnamespace std.os.windows.user32;
 const GetModuleHandleA = std.os.windows.kernel32.GetModuleHandleA;
+const WS_POPUP = 0x80000000;
+const WS_BORDER = 0x00800000;
+const LPCSTR = std.os.windows.LPCSTR;
 const HDC = std.os.windows.HDC;
 const HWND = std.os.windows.HWND;
 const HINSTANCE = std.os.windows.HINSTANCE;
@@ -42,38 +47,16 @@ const PaintStruct = extern struct {
 const MONITOR_DEFAULTTOPRIMARY = 0x01;
 const HMONITOR = *@OpaqueType();
 
+const MonitorEnumProc = fn (arg1: HMONITOR, arg2: ?HDC, arg3: ?*const Rect, arg4: LPARAM) callconv(.Stdcall) void;
 extern "user32" fn MonitorFromPoint(pt: Point, dwFlags: u32) callconv(.Stdcall) ?HMONITOR;
 extern "user32" fn GetMonitorInfoA(monitor: HMONITOR, lpmi: *MonitorInfoEx) bool;
 extern "user32" fn BeginPaint(hWnd: HWND, lpPaint: *PaintStruct) HDC;
 extern "user32" fn EndPaint(hWnd: HWND, lpPaint: *const PaintStruct) bool;
+extern "user32" fn EnumDisplayMonitors(hdc: ?HDC, lprcClip: ?*const Rect, lpfnEnum: MonitorEnumProc, dwData: LPARAM) bool;
 
-pub const Display = struct {
-    handle: HMONITOR,
-    area: Rect,
-    work_area: Rect,
-    device_name_mem: [32]u8,
+pub const DisplayHandle = HMONITOR;
 
-    pub fn deviceName(self: Display) []const u8 {
-        return std.mem.spanZ(@ptrCast([*:0]const u8, &self.device_name_mem));
-    }
-};
-
-pub fn openDefaultDisplay(allocator: *std.mem.Allocator) !Display {
-    const monitor_handle = MonitorFromPoint(.{ .x = 0, .y = 0 }, MONITOR_DEFAULTTOPRIMARY).?;
-    var monitor_info: MonitorInfoEx = undefined;
-    monitor_info.cbSize = @sizeOf(MonitorInfoEx);
-
-    if (!GetMonitorInfoA(monitor_handle, &monitor_info)) {
-        return error.InvalidDisplayInfo;
-    }
-
-    return Display{
-        .handle = monitor_handle,
-        .area = monitor_info.rcMonitor,
-        .work_area = monitor_info.rcWork,
-        .device_name_mem = monitor_info.szDevice,
-    };
-}
+var class_id: ?LPCSTR = null;
 
 pub const Window = struct {
     handle: HWND,
@@ -95,40 +78,64 @@ fn wndProc(handle: HWND, msg: c_uint, wParam: usize, lParam: LPARAM) callconv(.S
     }
 }
 
-// pub fn createWindow(connection: *Connection) !xcb_window_t {
-pub fn createWindow(display: *Display, width: u16, height: u16) !Window {
-    const hInstance = @ptrCast(HINSTANCE, GetModuleHandleA(null).?);
+pub const Display = struct {
+    handle: HMONITOR,
+    area: Rect,
+    work_area: Rect,
 
-    // zeroInit with the values we need doesnt work for some reason.
-    var wnd_class = std.mem.zeroes(WNDCLASSEXA);
-    wnd_class.cbSize = @sizeOf(WNDCLASSEXA);
-    wnd_class.lpfnWndProc = wndProc;
-    wnd_class.hInstance = hInstance;
-    wnd_class.lpszClassName = "zig-window";
-
-    const class_id = RegisterClassExA(&wnd_class);
-
-    const x = @divTrunc(display.work_area.right - display.work_area.left, 2) - @intCast(i32, width / 2);
-    const y = @divTrunc(display.work_area.bottom - display.work_area.top, 2) - @intCast(i32, height / 2);
-    if (CreateWindowExA(
-        0,
-        "zig-window",
-        "Zig window",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        x,
-        y,
-        width,
-        height,
-        null,
-        null,
-        hInstance,
-        null,
-    )) |handle| {
-        _ = ShowWindow(handle, SW_SHOW);
-        return Window{ .handle = handle };
-    } else {
-        return error.CreateWindowFailed;
+    pub fn width(self: Display) u16 {
+        return @intCast(u16, self.area.right - self.area.left);
     }
+
+    pub fn height(self: Display) u16 {
+        return @intCast(u16, self.area.bottom - self.area.top);
+    }
+
+    pub fn createWindow(self: Display, options: CreateWindowOptions) !Window {
+        const hInstance = @ptrCast(HINSTANCE, GetModuleHandleA(null).?);
+
+        if (class_id == null) {
+            // zeroInit with the values we need doesnt work for some reason.
+            var wnd_class = std.mem.zeroes(WNDCLASSEXA);
+            wnd_class.cbSize = @sizeOf(WNDCLASSEXA);
+            wnd_class.lpfnWndProc = wndProc;
+            wnd_class.hInstance = hInstance;
+            wnd_class.lpszClassName = "zig-window";
+
+            const class_atom = RegisterClassExA(&wnd_class);
+            class_id = @intToPtr(LPCSTR, @as(usize, class_atom));
+        }
+
+        const x = @divTrunc(self.work_area.right + self.work_area.left, 2) - @intCast(i32, options.width / 2);
+        const y = @divTrunc(self.work_area.bottom + self.work_area.top, 2) - @intCast(i32, options.height / 2);
+        const style: u32 = if (options.title_bar) WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX else WS_POPUP | WS_BORDER;
+        if (CreateWindowExA(0, class_id.?, options.title, style, x, y, options.width, options.height, null, null, hInstance, null)) |handle| {
+            _ = ShowWindow(handle, SW_SHOW);
+            return Window{ .handle = handle };
+        } else {
+            return error.CreateWindowFailed;
+        }
+    }
+};
+
+fn getDisplayFromHandle(handle: HMONITOR) !Display {
+    var monitor_info: MonitorInfoEx = undefined;
+    monitor_info.cbSize = @sizeOf(MonitorInfoEx);
+
+    if (!GetMonitorInfoA(handle, &monitor_info)) {
+        return error.InvalidDisplayInfo;
+    }
+
+    return Display{
+        .handle = handle,
+        .area = monitor_info.rcMonitor,
+        .work_area = monitor_info.rcWork,
+    };
+}
+
+pub fn getDefaultDisplay(allocator: *std.mem.Allocator) !Display {
+    const monitor_handle = MonitorFromPoint(.{ .x = 0, .y = 0 }, MONITOR_DEFAULTTOPRIMARY).?;
+    return try getDisplayFromHandle(monitor_handle);
 }
 
 pub fn loop() bool {
@@ -138,4 +145,37 @@ pub fn loop() bool {
     _ = TranslateMessage(&msg);
     _ = DispatchMessageA(&msg);
     return true;
+}
+
+const GetInfoListError = error{
+    InvalidDisplayInfo,
+    OutOfMemory,
+};
+
+const MonitorEnumData = struct {
+    list: std.ArrayList(Display),
+    err: ?GetInfoListError,
+};
+
+fn monitorEnum(handle: HMONITOR, hdc: ?HDC, rect: ?*const Rect, param: LPARAM) callconv(.Stdcall) void {
+    var data = @ptrCast(*MonitorEnumData, @alignCast(@alignOf(MonitorEnumData), param.?));
+    data.list.append(getDisplayFromHandle(handle) catch |err| {
+        data.err = err;
+        return;
+    }) catch {
+        data.err = error.OutOfMemory;
+        return;
+    };
+}
+
+pub fn getDisplayList(allocator: *std.mem.Allocator) ![]Display {
+    var data = MonitorEnumData{
+        .list = std.ArrayList(Display).init(allocator),
+        .err = null,
+    };
+    if (EnumDisplayMonitors(null, null, monitorEnum, @ptrCast(LPARAM, &data))) {
+        return error.EnumDisplayMonitorsFailed;
+    }
+    if (data.err) |err| return err;
+    return data.list.toOwnedSlice();
 }

@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 const File = std.fs.File;
 
 usingnamespace @import("xproto.zig");
+usingnamespace @import("main.zig");
 
 pub const Display = struct {
     name: []u8,
@@ -120,7 +121,7 @@ pub const Auth = struct {
     }
 };
 
-pub fn openDefaultDisplay(allocator: *Allocator) !Connection {
+pub fn getDefaultDisplay(allocator: *Allocator) !Connection {
     const default_name = getDefaultDisplayName() orelse return error.UnknownDefaultDisplay;
     return openDisplay(allocator, default_name);
 }
@@ -171,7 +172,7 @@ fn createContext(connection: *Connection, mask: u32, values: []u32) !u32 {
     return xid;
 }
 
-pub fn createWindow(connection: *Connection, width: u16, height: u16) !Window {
+pub fn createWindow(connection: *Connection, options: CreateWindowOptions) !Window {
     const screen: Screen = connection.screens[0];
     const mask = X_GC_FOREGROUND | X_GC_GRAPHICS_EXPOSURES;
     const values: []u32 = &[_]u32{ screen.black_pixel, 0 };
@@ -187,8 +188,8 @@ pub fn createWindow(connection: *Connection, width: u16, height: u16) !Window {
         .parent = screen.root,
         .x = 0,
         .y = 0,
-        .width = width,
-        .height = height,
+        .width = options.width,
+        .height = options.height,
         .border_width = 0,
         .class = 0,
         .visual = 0,
