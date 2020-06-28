@@ -3,20 +3,9 @@ const window = @import("window");
 
 pub const io_mode = .evented;
 
-pub fn main() !void {
-    var conn = try window.openDefaultDisplay(std.heap.page_allocator);
-    switch (conn.status) {
-        .Ok => {},
-        else => {
-            std.debug.print("unable to open default display: {}\n", .{conn.setup});
-            std.process.exit(1);
-        },
+pub fn main() anyerror!void {
+    var display = try window.openDefaultDisplay(std.heap.page_allocator);
+    const win = try window.createWindow(&display, 800, 600);
+    while (window.loop()) {
     }
-
-    try window.createWindow(&conn, 0, 0, 500, 500);
-
-    std.debug.warn("OK\n", .{});
-
-    //display screen
-    while (true) {}
 }
