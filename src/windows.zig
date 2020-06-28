@@ -119,8 +119,8 @@ pub fn createWindow(display: *Display, options: CreateWindowOptions) !Window {
         class_id = @intToPtr(LPCSTR, @as(usize, class_atom));
     }
 
-    const x = @divTrunc(display.work_area.right - display.work_area.left, 2) - @intCast(i32, options.width / 2);
-    const y = @divTrunc(display.work_area.bottom - display.work_area.top, 2) - @intCast(i32, options.height / 2);
+    const x = @divTrunc(display.work_area.right + display.work_area.left, 2) - @intCast(i32, options.width / 2);
+    const y = @divTrunc(display.work_area.bottom + display.work_area.top, 2) - @intCast(i32, options.height / 2);
     const style: u32 = if (options.title_bar) WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX else WS_POPUP | WS_BORDER;
     if (CreateWindowExA(0, class_id.?, options.title, style, x, y, options.width, options.height, null, null, hInstance, null)) |handle| {
         _ = ShowWindow(handle, SW_SHOW);
