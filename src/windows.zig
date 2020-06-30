@@ -53,7 +53,6 @@ extern "user32" fn GetMonitorInfoA(monitor: HMONITOR, lpmi: *MonitorInfoEx) bool
 extern "user32" fn BeginPaint(hWnd: HWND, lpPaint: *PaintStruct) HDC;
 extern "user32" fn EndPaint(hWnd: HWND, lpPaint: *const PaintStruct) bool;
 extern "user32" fn EnumDisplayMonitors(hdc: ?HDC, lprcClip: ?*const Rect, lpfnEnum: MonitorEnumProc, dwData: LPARAM) bool;
-// TODO: Check if those are actually in gdi32
 extern "opengl32" fn wglCreateContext(hdc: HDC) callconv(.Stdcall) ?HGLRC;
 extern "opengl32" fn wglMakeCurrent(?HDC, ?HGLRC) callconv(.Stdcall) bool;
 extern "opengl32" fn wglDeleteContext(HGLRC) callconv(.Stdcall) bool;
