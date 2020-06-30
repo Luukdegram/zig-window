@@ -55,9 +55,10 @@ pub const Display = struct {
 
         try connection.file.writevAll(parts[0..2]);
 
-        return Window{
-            .handle = xid,
-        };
+        const window = Window{ .handle = xid };
+
+        try changeWindowProperty(connection, window, .Replace, 39, 31, .{ .String = std.mem.span(options.title) });
+        return window;
     }
 };
 
@@ -228,6 +229,82 @@ fn createContext(connection: *Connection, root: u32, mask: u32, values: []u32) !
     try connection.file.writevAll(parts.toOwnedSlice());
 
     return xid;
+}
+
+/// The mode you want to change the window property
+/// For example, to append to the window title you use .Append
+pub const PropertyMode = enum(u8) {
+    Replace,
+    Prepend,
+    Append,
+};
+
+/// Property is a union which can be used to change
+/// a window property
+const Property = union(enum) {
+    Int: u32,
+    String: []const u8,
+
+    /// Returns a pointer to the underlaying data
+    /// Note that for union Int it first converts it to a byte slice,
+    /// and then returns to pointer to that slice
+    fn ptr(self: Property) [*]const u8 {
+        return switch (self) {
+            .Int => |int| @ptrCast([*]const u8, &std.mem.toBytes(int)),
+            .String => |array| array.ptr,
+        };
+    }
+
+    /// Returns the length of the underlaying data,
+    /// Note that for union Int it first converts it to a byte slice,
+    /// and then returns the length of that
+    fn len(self: Property) u32 {
+        return switch (self) {
+            .Int => |int| std.mem.toBytes(int).len,
+            .String => |array| @intCast(u32, array.len),
+        };
+    }
+};
+
+/// Allows to change a window property using the given parameters
+/// such as the window title
+fn changeWindowProperty(
+    connection: *Connection,
+    window: Window,
+    mode: PropertyMode,
+    property: u32,
+    p_type: u32,
+    p_property: Property,
+) !void {
+    const pad = [3]u8{ 0, 0, 0 };
+
+    const data_ptr = p_property.ptr();
+    const data_len = p_property.len();
+
+    const total_length: u16 = @intCast(u16, @sizeOf(XChangePropertyRequest) + data_len + xpad(data_len)) / 4;
+
+    const request = XChangePropertyRequest{
+        .major_opcode = 18,
+        .mode = @enumToInt(mode),
+        .length = total_length,
+        .window = window.handle,
+        .property = property,
+        .type = p_type,
+        .format = 8,
+        .pad0 = [_]u8{0} ** 3,
+        .data_len = data_len,
+    };
+
+    const allocator = connection.allocator;
+    var parts: [3]os.iovec_const = undefined;
+    parts[0].iov_base = @ptrCast([*]const u8, &request);
+    parts[0].iov_len = @sizeOf(XChangePropertyRequest);
+    parts[1].iov_base = data_ptr;
+    parts[1].iov_len = data_len;
+    parts[2].iov_base = &pad;
+    parts[2].iov_len = xpad(data_len);
+
+    try connection.file.writevAll(&parts);
 }
 
 pub const OpenDisplayError = error{

@@ -12,6 +12,7 @@ pub const XDrawable = u32;
 pub const XPixmap = u32;
 pub const XFont = u32;
 pub const XBool32 = u32;
+pub const XAtom = u32;
 
 pub const XSetupRequest = extern struct {
     byte_order: u8,
@@ -161,4 +162,15 @@ pub const XCreateGCValueList = extern struct {
     dash_offset: u32 = 0,
     dashes: u32 = 0,
     arc_mode: u32 = 1,
+};
+pub const XChangePropertyRequest = extern struct {
+    major_opcode: u8,
+    mode: u8,
+    length: u16,
+    window: XWindow,
+    property: XAtom,
+    type: XAtom,
+    format: u8,
+    pad0: [3]u8,
+    data_len: u32,
 };
