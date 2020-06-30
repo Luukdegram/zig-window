@@ -53,14 +53,112 @@ extern "user32" fn GetMonitorInfoA(monitor: HMONITOR, lpmi: *MonitorInfoEx) bool
 extern "user32" fn BeginPaint(hWnd: HWND, lpPaint: *PaintStruct) HDC;
 extern "user32" fn EndPaint(hWnd: HWND, lpPaint: *const PaintStruct) bool;
 extern "user32" fn EnumDisplayMonitors(hdc: ?HDC, lprcClip: ?*const Rect, lpfnEnum: MonitorEnumProc, dwData: LPARAM) bool;
+// TODO: Check if those are actually in gdi32
+extern "opengl32" fn wglCreateContext(hdc: HDC) callconv(.Stdcall) ?HGLRC;
+extern "opengl32" fn wglMakeCurrent(?HDC, ?HGLRC) callconv(.Stdcall) bool;
+extern "opengl32" fn wglDeleteContext(HGLRC) callconv(.Stdcall) bool;
+extern "opengl32" fn wglGetProcAddress(name: LPCSTR) callconv(.Stdcall) ?*c_void;
 
 pub const DisplayHandle = HMONITOR;
 
-var class_id: ?LPCSTR = null;
+const HGLRC = *@OpaqueType();
+
+pub const GLContext = struct {
+    hdc: HDC,
+    gl_handle: HGLRC,
+
+    pub fn enable(self: GLContext) !void {
+        if (!wglMakeCurrent(self.hdc, self.gl_handle)) {
+            return error.GLContextSwitch;
+        }
+    }
+
+    pub fn disable(self: GLContext) !void {
+        if (!wglMakeCurrent(null, null)) {
+            return error.GLContextSwitch;
+        }
+    }
+
+    pub fn deinit(self: GLContext) void {
+        _ = wglDeleteContext(self.gl_handle);
+    }
+};
+
+const WGL_CONTEXT_MAJOR_VERSION_ARB = 0x2091;
+const WGL_CONTEXT_MINOR_VERSION_ARB = 0x2092;
+const WGL_CONTEXT_FLAGS_ARB = 0x2094;
+const WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB = 0x00000002;
+
+const wglCreateContextAttribsARBFn = fn (hdc: HDC, hShareContext: ?HGLRC, attribList: [*]const i32) callconv(.Stdcall) ?HGLRC;
+var wglCreateContextAttribsARB: ?wglCreateContextAttribsARBFn = null;
 
 pub const Window = struct {
     handle: HWND,
+
+    pub fn makeGLContext(win: Window, major_version: u8, minor_version: u8) !GLContext {
+        std.debug.assert(major_version >= 2 and minor_version >= 1);
+
+        const hdc = GetDC(win.handle) orelse return error.GetDrawingContext;
+
+        // TODO Better defaults? Options?
+        const pfd = std.mem.zeroInit(std.os.windows.gdi32.PIXELFORMATDESCRIPTOR, .{
+            .nVersion = 1,
+            .dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
+            .iPixelType = PFD_TYPE_RGBA, .cColorBits = 32, .cDepthBits = 24,
+            .cStencilBits = 8, .iLayerType = PFD_MAIN_PLANE,
+        });
+
+        const pixel_format = std.os.windows.gdi32.ChoosePixelFormat(hdc, &pfd);
+        if (pixel_format == 0)
+            return error.ChoodePixelFormat;
+
+        if (!std.os.windows.gdi32.SetPixelFormat(hdc, pixel_format, &pfd)) {
+            return std.os.windows.unexpectedError(std.os.windows.kernel32.GetLastError());
+        }
+
+
+        // OpenGL 2.1 context
+        const temp_ctx = wglCreateContext(hdc) orelse return std.os.windows.unexpectedError(std.os.windows.kernel32.GetLastError());
+
+        var context = GLContext{ .hdc = hdc, .gl_handle = temp_ctx };
+        try context.enable();
+
+        if (major_version == 2 and minor_version == 1) {
+            return GLContext{ .hdc = hdc, .gl_handle = temp_ctx };
+        }
+
+        // TODO Are those the best defaults?
+        //      Let it be configurable?
+        const attributes = [_]i32{
+            WGL_CONTEXT_MAJOR_VERSION_ARB, major_version,
+            WGL_CONTEXT_MINOR_VERSION_ARB, minor_version,
+            WGL_CONTEXT_FLAGS_ARB,         WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
+            0,
+        };
+
+        if (wglCreateContextAttribsARB == null) {
+            if (wglGetProcAddress("wglCreateContextAttribsARB")) |fn_ptr| {
+                wglCreateContextAttribsARB = @ptrCast(wglCreateContextAttribsARBFn, fn_ptr);
+            } else {
+                return std.os.windows.unexpectedError(std.os.windows.kernel32.GetLastError());
+            }
+        }
+
+        const actual_ctx = wglCreateContextAttribsARB.?(hdc, null, &attributes) orelse return std.os.windows.unexpectedError(std.os.windows.kernel32.GetLastError());
+
+        if (!wglMakeCurrent(null, null)) {
+            return error.GLContextSwitch;
+        }
+
+        context.deinit();
+        context.gl_handle = actual_ctx;
+        try context.enable();
+
+        return context;
+    }
 };
+
+var class_id: ?LPCSTR = null;
 
 fn wndProc(handle: HWND, msg: c_uint, wParam: usize, lParam: LPARAM) callconv(.Stdcall) LRESULT {
     switch (msg) {

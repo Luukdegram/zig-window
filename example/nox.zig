@@ -12,5 +12,8 @@ pub fn main() anyerror!void {
         .height = 600,
         .title = "Zig window",
     });
+
+    const ctx = try win.makeGLContext(3, 1);
+
     while (window.loop()) {}
 }
