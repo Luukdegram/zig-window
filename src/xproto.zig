@@ -4,6 +4,7 @@ pub const X_GC_FOREGROUND = 4;
 pub const X_GC_BACKGROUND = 8;
 pub const X_GC_GRAPHICS_EXPOSURES = 65536;
 pub const X_GX_COPY = 3;
+pub const XCB_CW_BACK_PIXEL = 2;
 pub const XKeycode = u8;
 pub const XVisualId = u32;
 pub const XWindow = u32;
@@ -169,7 +170,7 @@ pub const XChangePropertyRequest = extern struct {
     length: u16,
     window: XWindow,
     property: XAtom,
-    type: XAtom,
+    prop_type: XAtom,
     format: u8,
     pad0: [3]u8,
     data_len: u32,

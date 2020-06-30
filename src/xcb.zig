@@ -17,18 +17,14 @@ pub const Display = struct {
 
     /// Creates a new window on this display
     pub fn createWindow(self: *Display, options: CreateWindowOptions) !Window {
-        var connection = &self.connection;
+        const connection = &self.connection;
         const screen: Screen = self.handle;
-        const mask = X_GC_FOREGROUND | X_GC_GRAPHICS_EXPOSURES;
-        const values: []u32 = &[_]u32{ screen.black_pixel, 0 };
-
-        const foreground = try createContext(connection, screen.root, mask, values);
         const xid = try connection.getNewXid();
 
         const window_request = XCreateWindowRequest{
             .major_opcode = 1,
             .depth = 0,
-            .length = @sizeOf(XCreateWindowRequest) / 4,
+            .length = @sizeOf(XCreateWindowRequest) / 4 + 1,
             .wid = xid,
             .parent = screen.root,
             .x = 0,
@@ -37,12 +33,14 @@ pub const Display = struct {
             .height = options.height,
             .border_width = 0,
             .class = 0,
-            .visual = 0,
-            .value_mask = 0,
+            .visual = screen.root_visual,
+            .value_mask = XCB_CW_BACK_PIXEL,
         };
-        var parts: [2]os.iovec_const = undefined;
+        var parts: [3]os.iovec_const = undefined;
         parts[0].iov_base = @ptrCast([*]const u8, &window_request);
         parts[0].iov_len = @sizeOf(XCreateWindowRequest);
+        parts[1].iov_base = @ptrCast([*]const u8, &screen.black_pixel);
+        parts[1].iov_len = 4;
 
         const map_request = XMapWindowRequest{
             .major_opcode = 8,
@@ -50,10 +48,10 @@ pub const Display = struct {
             .length = @sizeOf(XMapWindowRequest) / 4,
             .window = xid,
         };
-        parts[1].iov_base = @ptrCast([*]const u8, &map_request);
-        parts[1].iov_len = @sizeOf(XMapWindowRequest);
+        parts[2].iov_base = @ptrCast([*]const u8, &map_request);
+        parts[2].iov_len = @sizeOf(XMapWindowRequest);
 
-        try connection.file.writevAll(parts[0..2]);
+        try connection.file.writevAll(parts[0..3]);
 
         const window = Window{ .handle = xid };
 
@@ -241,6 +239,8 @@ pub const PropertyMode = enum(u8) {
 
 /// Property is a union which can be used to change
 /// a window property
+/// TODO: Add more properties that can be modified. For now it's only
+/// `STRING` and `INTEGER`.
 const Property = union(enum) {
     Int: u32,
     String: []const u8,
@@ -273,14 +273,13 @@ fn changeWindowProperty(
     window: Window,
     mode: PropertyMode,
     property: u32,
-    p_type: u32,
-    p_property: Property,
+    prop_type: u32,
+    data: Property,
 ) !void {
+    const allocator = connection.allocator;
     const pad = [3]u8{ 0, 0, 0 };
-
-    const data_ptr = p_property.ptr();
-    const data_len = p_property.len();
-
+    const data_ptr = data.ptr();
+    const data_len = data.len();
     const total_length: u16 = @intCast(u16, @sizeOf(XChangePropertyRequest) + data_len + xpad(data_len)) / 4;
 
     const request = XChangePropertyRequest{
@@ -289,13 +288,12 @@ fn changeWindowProperty(
         .length = total_length,
         .window = window.handle,
         .property = property,
-        .type = p_type,
-        .format = 8,
-        .pad0 = [_]u8{0} ** 3,
+        .prop_type = prop_type,
+        .format = 8, // by default we make our slices into bytes
+        .pad0 = pad,
         .data_len = data_len,
     };
 
-    const allocator = connection.allocator;
     var parts: [3]os.iovec_const = undefined;
     parts[0].iov_base = @ptrCast([*]const u8, &request);
     parts[0].iov_len = @sizeOf(XChangePropertyRequest);
