@@ -47,17 +47,17 @@ pub const XIdRangeRequest = extern struct {
     length: u16,
 };
 pub const XCreateWindowRequest = extern struct {
-    major_opcode: u8,
-    depth: u8,
+    major_opcode: u8 = 1,
+    depth: u8 = 0,
     length: u16,
     wid: XWindow,
     parent: XWindow,
-    x: i16,
-    y: i16,
+    x: i16 = 0,
+    y: i16 = 0,
     width: u16,
     height: u16,
-    border_width: u16,
-    class: u16,
+    border_width: u16 = 0,
+    class: u16 = 0,
     visual: XVisualId,
     value_mask: u32,
 };
@@ -165,13 +165,31 @@ pub const XCreateGCValueList = extern struct {
     arc_mode: u32 = 1,
 };
 pub const XChangePropertyRequest = extern struct {
-    major_opcode: u8,
+    major_opcode: u8 = 18,
     mode: u8,
     length: u16,
     window: XWindow,
     property: XAtom,
     prop_type: XAtom,
-    format: u8,
-    pad0: [3]u8,
+    format: u8 = 8, // by default we make our slices into bytes
+    pad0: [3]u8, 
     data_len: u32,
+};
+pub const XQueryExtensionRequest = extern struct {
+    major_opcode: u8 = 98,
+    pad0: u8 = 0,
+    length: u16,
+    name_len: u16,
+    pad1: [2]u8 = [_]u8{0, 0},
+};
+pub const XQueryExtensionReply = extern struct {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    length: u32,
+    present: u8,
+    major_opcode: u8,
+    first_event: u8,
+    first_error: u8,
+    pad1: [5]u32,
 };

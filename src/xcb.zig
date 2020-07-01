@@ -22,17 +22,11 @@ pub const Display = struct {
         const xid = try connection.getNewXid();
 
         const window_request = XCreateWindowRequest{
-            .major_opcode = 1,
-            .depth = 0,
             .length = @sizeOf(XCreateWindowRequest) / 4 + 1,
             .wid = xid,
             .parent = screen.root,
-            .x = 0,
-            .y = 0,
             .width = options.width,
             .height = options.height,
-            .border_width = 0,
-            .class = 0,
             .visual = screen.root_visual,
             .value_mask = XCB_CW_BACK_PIXEL,
         };
@@ -117,6 +111,10 @@ pub const Connection = struct {
             if (self.xid.last == 0) {
                 self.xid.max = self.setup.mask;
             } else {
+                if (!try supportsExtension(self, "XC-MISC")) {
+                    return error.MiscUnsupported;
+                }
+                
                 const xid_range_request = XIdRangeRequest{
                     .major_opcode = 136,
                     .minor_opcode = 1,
@@ -229,6 +227,26 @@ fn createContext(connection: *Connection, root: u32, mask: u32, values: []u32) !
     return xid;
 }
 
+/// Checks if the X11 server supports the given extension or not
+fn supportsExtension(connection: *Connection, ext_name: []const u8) !bool {
+    const request = XQueryExtensionRequest{
+        .length = @intCast(u16, @sizeOf(XQueryExtensionRequest) + ext_name.len + xpad(ext_name.len)) / 4,
+        .name_len = @intCast(u16, ext_name.len),
+    };
+    var parts: [3]os.iovec_const = undefined;
+    parts[0].iov_base = @ptrCast([*]const u8, &request);
+    parts[0].iov_len = @sizeOf(XQueryExtensionRequest);
+    parts[1].iov_base = ext_name.ptr;
+    parts[1].iov_len = ext_name.len;
+    parts[2].iov_base = &request.pad1;
+    parts[2].iov_len = xpad(ext_name.len);
+
+    try connection.file.writevAll(&parts);
+    const reply = try connection.file.reader().readStruct(XQueryExtensionReply);
+
+    return reply.present != 0;
+}
+
 /// The mode you want to change the window property
 /// For example, to append to the window title you use .Append
 pub const PropertyMode = enum(u8) {
@@ -276,20 +294,17 @@ fn changeWindowProperty(
     prop_type: u32,
     data: Property,
 ) !void {
-    const allocator = connection.allocator;
     const pad = [3]u8{ 0, 0, 0 };
     const data_ptr = data.ptr();
     const data_len = data.len();
     const total_length: u16 = @intCast(u16, @sizeOf(XChangePropertyRequest) + data_len + xpad(data_len)) / 4;
 
     const request = XChangePropertyRequest{
-        .major_opcode = 18,
         .mode = @enumToInt(mode),
         .length = total_length,
         .window = window.handle,
         .property = property,
         .prop_type = prop_type,
-        .format = 8, // by default we make our slices into bytes
         .pad0 = pad,
         .data_len = data_len,
     };
