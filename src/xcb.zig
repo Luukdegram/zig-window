@@ -20,32 +20,34 @@ pub const Display = struct {
         const connection = &self.connection;
         const screen: Screen = self.handle;
         const xid = try connection.getNewXid();
+        const event_mask: u32 = X_BUTTON_PRESS | X_BUTTON_RELEASE | X_KEY_PRESS |
+            X_KEY_RELEASE;
 
         const window_request = XCreateWindowRequest{
-            .length = @sizeOf(XCreateWindowRequest) / 4 + 1,
+            .length = @sizeOf(XCreateWindowRequest) / 4 + 2,
             .wid = xid,
             .parent = screen.root,
             .width = options.width,
             .height = options.height,
             .visual = screen.root_visual,
-            .value_mask = XCB_CW_BACK_PIXEL,
+            .value_mask = X_BACK_PIXEL | X_EVENT_MASK,
         };
-        var parts: [3]os.iovec_const = undefined;
+        var parts: [4]os.iovec_const = undefined;
         parts[0].iov_base = @ptrCast([*]const u8, &window_request);
         parts[0].iov_len = @sizeOf(XCreateWindowRequest);
         parts[1].iov_base = @ptrCast([*]const u8, &screen.black_pixel);
         parts[1].iov_len = 4;
+        parts[2].iov_base = @ptrCast([*]const u8, &event_mask);
+        parts[2].iov_len = 4;
 
         const map_request = XMapWindowRequest{
-            .major_opcode = 8,
-            .pad0 = 0,
             .length = @sizeOf(XMapWindowRequest) / 4,
             .window = xid,
         };
-        parts[2].iov_base = @ptrCast([*]const u8, &map_request);
-        parts[2].iov_len = @sizeOf(XMapWindowRequest);
+        parts[3].iov_base = @ptrCast([*]const u8, &map_request);
+        parts[3].iov_len = @sizeOf(XMapWindowRequest);
 
-        try connection.file.writevAll(parts[0..3]);
+        try connection.file.writevAll(&parts);
 
         const window = Window{ .handle = xid };
 
@@ -114,17 +116,13 @@ pub const Connection = struct {
                 if (!try supportsExtension(self, "XC-MISC")) {
                     return error.MiscUnsupported;
                 }
-                
-                const xid_range_request = XIdRangeRequest{
-                    .major_opcode = 136,
-                    .minor_opcode = 1,
-                    .length = 1,
-                };
+
+                const xid_range_request = XIdRangeRequest{};
                 var parts: [1]os.iovec_const = undefined;
                 parts[0].iov_base = @ptrCast([*]const u8, &xid_range_request);
                 parts[0].iov_len = @sizeOf(XIdRangeRequest);
 
-                _ = try self.file.writev(parts[0..1]);
+                _ = try self.file.writev(&parts);
                 const stream = self.file.reader();
                 const reply = try stream.readStruct(XIdRangeReply);
 
@@ -199,8 +197,6 @@ fn createContext(connection: *Connection, root: u32, mask: u32, values: []u32) !
     const xid = try connection.getNewXid();
 
     const request = XCreateGCRequest{
-        .major_opcode = 55,
-        .pad0 = 0,
         .length = @sizeOf(XCreateGCRequest) / 4 + @intCast(u16, values.len),
         .cid = xid,
         .drawable = root,

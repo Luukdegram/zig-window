@@ -1,10 +1,17 @@
+//TODO: Convert those consts into enums?
 pub const X_PROTOCOL = 11;
 pub const X_PROTOCOL_REVISION = 0;
 pub const X_GC_FOREGROUND = 4;
 pub const X_GC_BACKGROUND = 8;
 pub const X_GC_GRAPHICS_EXPOSURES = 65536;
 pub const X_GX_COPY = 3;
-pub const XCB_CW_BACK_PIXEL = 2;
+pub const X_BACK_PIXEL = 2;
+pub const X_EVENT_MASK = 2048;
+pub const X_KEY_PRESS = 2;
+pub const X_KEY_RELEASE = 3;
+pub const X_BUTTON_PRESS = 4;
+pub const X_BUTTON_RELEASE = 5;
+
 pub const XKeycode = u8;
 pub const XVisualId = u32;
 pub const XWindow = u32;
@@ -42,9 +49,9 @@ pub const XSetup = extern struct {
     pad1: [4]u8,
 };
 pub const XIdRangeRequest = extern struct {
-    major_opcode: u8,
-    minor_opcode: u8,
-    length: u16,
+    major_opcode: 136,
+    minor_opcode: 1,
+    length: 1,
 };
 pub const XCreateWindowRequest = extern struct {
     major_opcode: u8 = 1,
@@ -68,8 +75,8 @@ pub const XAttributeRequest = extern struct {
     window: XWindow,
 };
 pub const XMapWindowRequest = extern struct {
-    major_opcode: u8,
-    pad0: u8,
+    major_opcode: u8 = 8,
+    pad0: u8 = 0,
     length: u16,
     window: XWindow,
 };
@@ -132,8 +139,8 @@ pub const XIdRangeReply = extern struct {
     pad1: [16]u8,
 };
 pub const XCreateGCRequest = extern struct {
-    major_opcode: u8,
-    pad0: u8,
+    major_opcode: u8 = 55,
+    pad0: u8 = 0,
     length: u16,
     cid: XGContext,
     drawable: XDrawable,
@@ -172,7 +179,7 @@ pub const XChangePropertyRequest = extern struct {
     property: XAtom,
     prop_type: XAtom,
     format: u8 = 8, // by default we make our slices into bytes
-    pad0: [3]u8, 
+    pad0: [3]u8,
     data_len: u32,
 };
 pub const XQueryExtensionRequest = extern struct {
@@ -180,7 +187,7 @@ pub const XQueryExtensionRequest = extern struct {
     pad0: u8 = 0,
     length: u16,
     name_len: u16,
-    pad1: [2]u8 = [_]u8{0, 0},
+    pad1: [2]u8 = [_]u8{ 0, 0 },
 };
 pub const XQueryExtensionReply = extern struct {
     response_type: u8,
