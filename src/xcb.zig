@@ -251,14 +251,12 @@ fn waitForEvent(connection: *Connection) !Event {
         var bytes: [32]u8 = undefined;
         const length = try connection.file.reader().readAll(&bytes);
 
-        if (length != 32) {
-            return error.IncorrectReplySize;
-        }
-
         // assure the reply we receive is an event
         if (bytes[0] == 2) {
-            event = try Event.fromBytes(bytes);
-            std.debug.print("Event: {}\n", .{event});
+            event = Event.fromBytes(bytes) catch |err| switch (err) {
+                error.NotAnEvent => continue,
+                else => return err,
+            };
         }
     }
 
