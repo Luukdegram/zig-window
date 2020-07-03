@@ -1,4 +1,5 @@
 //TODO: Convert those consts into enums?
+//Some are used for masks and would be annoying to work with if they were enums
 pub const X_PROTOCOL = 11;
 pub const X_PROTOCOL_REVISION = 0;
 pub const X_GC_FOREGROUND = 4;
@@ -21,6 +22,7 @@ pub const XPixmap = u32;
 pub const XFont = u32;
 pub const XBool32 = u32;
 pub const XAtom = u32;
+pub const XColormap = u32;
 
 pub const XSetupRequest = extern struct {
     byte_order: u8,
