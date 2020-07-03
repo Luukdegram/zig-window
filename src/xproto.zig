@@ -51,9 +51,9 @@ pub const XSetup = extern struct {
     pad1: [4]u8,
 };
 pub const XIdRangeRequest = extern struct {
-    major_opcode: 136,
-    minor_opcode: 1,
-    length: 1,
+    major_opcode: u8 = 136,
+    minor_opcode: u8 = 1,
+    length: u16 = 1,
 };
 pub const XCreateWindowRequest = extern struct {
     major_opcode: u8 = 1,

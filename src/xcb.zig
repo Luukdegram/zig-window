@@ -10,6 +10,7 @@ const File = std.fs.File;
 
 usingnamespace @import("xproto.zig");
 usingnamespace @import("main.zig");
+usingnamespace @import("event.zig");
 
 pub const Display = struct {
     connection: Connection,
@@ -51,7 +52,7 @@ pub const Display = struct {
 
         const window = Window{ .handle = xid };
 
-        try changeWindowProperty(connection, window, .Replace, 39, 31, .{ .String = std.mem.span(options.title) });
+        try changeWindowProperty(connection, window, .Replace, 39, 31, .{ .string = std.mem.span(options.title) });
         return window;
     }
 };
@@ -243,6 +244,27 @@ fn supportsExtension(connection: *Connection, ext_name: []const u8) !bool {
     return reply.present != 0;
 }
 
+/// Waits for an event to occur. This function is blocking
+fn waitForEvent(connection: *Connection) !Event {
+    var event: ?Event = null;
+    while (event == null) {
+        var bytes: [32]u8 = undefined;
+        const length = try connection.file.reader().readAll(&bytes);
+
+        if (length != 32) {
+            return error.IncorrectReplySize;
+        }
+
+        // assure the reply we receive is an event
+        if (bytes[0] == 2) {
+            event = try Event.fromBytes(bytes);
+            std.debug.print("Event: {}\n", .{event});
+        }
+    }
+
+    return event.?;
+}
+
 /// The mode you want to change the window property
 /// For example, to append to the window title you use .Append
 pub const PropertyMode = enum(u8) {
@@ -256,16 +278,16 @@ pub const PropertyMode = enum(u8) {
 /// TODO: Add more properties that can be modified. For now it's only
 /// `STRING` and `INTEGER`.
 const Property = union(enum) {
-    Int: u32,
-    String: []const u8,
+    int: u32,
+    string: []const u8,
 
     /// Returns a pointer to the underlaying data
     /// Note that for union Int it first converts it to a byte slice,
     /// and then returns to pointer to that slice
     fn ptr(self: Property) [*]const u8 {
         return switch (self) {
-            .Int => |int| @ptrCast([*]const u8, &std.mem.toBytes(int)),
-            .String => |array| array.ptr,
+            .int => |int| @ptrCast([*]const u8, &std.mem.toBytes(int)),
+            .string => |array| array.ptr,
         };
     }
 
@@ -274,8 +296,8 @@ const Property = union(enum) {
     /// and then returns the length of that
     fn len(self: Property) u32 {
         return switch (self) {
-            .Int => |int| std.mem.toBytes(int).len,
-            .String => |array| @intCast(u32, array.len),
+            .int => |int| std.mem.toBytes(int).len,
+            .string => |array| @intCast(u32, array.len),
         };
     }
 };
