@@ -11,6 +11,7 @@ const File = std.fs.File;
 usingnamespace @import("xproto.zig");
 usingnamespace @import("main.zig");
 usingnamespace @import("event.zig");
+pub usingnamespace @import("vulkan.zig");
 
 pub const Display = struct {
     connection: Connection,
